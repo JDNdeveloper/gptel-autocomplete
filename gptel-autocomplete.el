@@ -121,7 +121,7 @@ completions."
          (context (concat before-context marked-line after-context))
          (prompt (concat "Complete the code at the cursor position █CURSOR█ in file '"
                          filename "':\n````````\n"
-                         context "\n````````\n/no_think\n"))
+                         context "\n````````\n"))
          (request-id (cl-incf gptel--completion-request-id))
          (target-point (point)))
     (gptel--log "Sending prompt of length %d (request-id: %d)"
@@ -130,7 +130,8 @@ completions."
       (gptel--log "Full prompt:\n%s" prompt))
     (gptel-request
      prompt
-     :system "You are a code completion assistant integrated into a code editor.
+     :system "/no_think
+You are a code completion assistant integrated into a code editor.
 
 Complete the code at the cursor position █CURSOR█. The █START_COMPLETION█ and █END_COMPLETION█ \
 markers indicate the exact region where your completion should be inserted, and you should only \
