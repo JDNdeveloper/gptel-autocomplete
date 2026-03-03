@@ -7,6 +7,8 @@
 - Request completions from LLMs.
 - Display inline ghost text completions.
 - Accept completions to insert them into your buffer.
+- Overlay-only keymap for completion acceptance bindings.
+- Optional idle-triggered automatic completion via minor mode.
 - Includes context around the cursor (context window size is configurable).
 - Provide additional context using standard `gptel` features (e.g. `gptel-add`).
 
@@ -63,11 +65,35 @@ Control whether gptel's context system is used in completions (enabled by defaul
 (setq gptel-autocomplete-use-context nil)
 ```
 
+Configure automatic idle completion:
+
+```elisp
+;; Wait 0.3 seconds before auto-completing when idle.
+(setq gptel-autocomplete-idle-delay 0.3)
+
+;; Trigger immediately after a command when Emacs becomes idle.
+(setq gptel-autocomplete-idle-delay 0)
+
+;; Disable idle completion.
+(setq gptel-autocomplete-idle-delay nil)
+```
+
+Bind keys that are active only while ghost text is visible:
+
+```elisp
+;; Example: use C-e to accept completion only when overlay is visible.
+(keymap-set gptel-autocomplete-completion-map "C-e" #'gptel-accept-completion)
+
+;; Optional: accept one word at a time.
+(keymap-set gptel-autocomplete-completion-map "M-f" #'gptel-accept-word)
+```
+
 ## Usage
 
 - `M-x gptel-complete` — Request a completion at point and display it as ghost text.
 - `M-x gptel-accept-completion` — Accept the currently displayed completion and insert it.
 - `M-x gptel-accept-word` — Accept only one word of the completion, keeping ghost text for the rest.
+- `M-x gptel-autocomplete-mode` — Enable or disable idle-triggered automatic completion in the current buffer.
 
 You can bind these commands to convenient keys in your preferred programming modes.
 

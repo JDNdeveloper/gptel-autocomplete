@@ -54,11 +54,23 @@ completions."
   :type 'boolean
   :group 'gptel-autocomplete)
 
+(defcustom gptel-autocomplete-idle-delay nil
+  "Time in seconds to wait before starting automatic completion.
+Complete immediately if set to 0.
+Disable idle completion if set to nil."
+  :type '(choice
+          (number :tag "Seconds of delay")
+          (const :tag "Idle completion disabled" nil))
+  :group 'gptel-autocomplete)
+
 (defvar gptel--completion-text nil
   "Current GPTel completion text.")
 
 (defvar gptel--completion-overlay nil
   "Overlay for displaying GPTel completion ghost text.")
+
+(defvar-local gptel--completion-keymap-overlay nil
+  "Overlay used to activate `gptel-autocomplete-completion-map'.")
 
 (defvar gptel--completion-overlays nil
   "List of all GPTel completion overlays for cleanup.")
@@ -68,6 +80,78 @@ completions."
 
 (defvar gptel--completion-suppress-clear nil
   "Non-nil suppresses the next post-command clear.")
+
+(defvar-local gptel--post-command-timer nil
+  "Idle timer used to debounce automatic completion requests.")
+
+(defconst gptel-autocomplete-completion-map (make-sparse-keymap)
+  "Keymap active only while a completion overlay is visible.")
+
+(defvar gptel-autocomplete-mode-map (make-sparse-keymap)
+  "Keymap for `gptel-autocomplete-mode'.")
+
+(define-minor-mode gptel-autocomplete-mode
+  "Toggle automatic idle completions in the current buffer."
+  :init-value nil
+  :lighter " GPTel-A"
+  :keymap gptel-autocomplete-mode-map
+  (if gptel-autocomplete-mode
+      (add-hook 'post-command-hook #'gptel--post-command nil 'local)
+    (remove-hook 'post-command-hook #'gptel--post-command 'local)
+    (gptel--cancel-post-command-timer)
+    (gptel-clear-completion)))
+
+(defun gptel--get-or-create-keymap-overlay ()
+  "Return the local keymap overlay for completion bindings."
+  (unless (overlayp gptel--completion-keymap-overlay)
+    (setq gptel--completion-keymap-overlay (make-overlay 1 1 nil nil t))
+    (overlay-put gptel--completion-keymap-overlay
+                 'keymap gptel-autocomplete-completion-map)
+    (overlay-put gptel--completion-keymap-overlay 'priority 1001))
+  gptel--completion-keymap-overlay)
+
+(defun gptel--move-keymap-overlay-at-point (&optional position)
+  "Move the completion keymap overlay to POSITION.
+If POSITION is nil, use point."
+  (let ((ov (gptel--get-or-create-keymap-overlay)))
+    (save-excursion
+      (when position
+        (goto-char position))
+      (move-overlay ov (point) (min (point-max) (+ 1 (point)))))))
+
+(defun gptel--cancel-post-command-timer ()
+  "Cancel the local post-command idle timer, if any."
+  (when gptel--post-command-timer
+    (cancel-timer gptel--post-command-timer)
+    (setq gptel--post-command-timer nil)))
+
+(defun gptel--post-command-debounce (buffer point tick)
+  "Request completion in BUFFER if POINT and TICK are unchanged."
+  (when (and (buffer-live-p buffer)
+             (equal (current-buffer) buffer)
+             gptel-autocomplete-mode
+             (numberp gptel-autocomplete-idle-delay)
+             (>= gptel-autocomplete-idle-delay 0)
+             (= (point) point)
+             (= (buffer-chars-modified-tick) tick)
+             (not gptel--completion-overlay))
+    (gptel-complete)))
+
+(defun gptel--post-command ()
+  "Schedule completion in `post-command-hook' when idle completion is enabled."
+  (gptel--cancel-post-command-timer)
+  (when (and (numberp gptel-autocomplete-idle-delay)
+             (>= gptel-autocomplete-idle-delay 0)
+             (not (minibufferp))
+             (not (active-minibuffer-window))
+             (not gptel--completion-overlay))
+    (setq gptel--post-command-timer
+          (run-with-idle-timer gptel-autocomplete-idle-delay
+                               nil
+                               #'gptel--post-command-debounce
+                               (current-buffer)
+                               (point)
+                               (buffer-chars-modified-tick)))))
 
 (defun gptel--log (fmt &rest args)
   "Log message FMT with ARGS if `gptel-autocomplete-debug` is non-nil."
@@ -85,6 +169,9 @@ completions."
   (dolist (ov gptel--completion-overlays)
     (when (overlayp ov)
       (delete-overlay ov)))
+  (when (overlayp gptel--completion-keymap-overlay)
+    (delete-overlay gptel--completion-keymap-overlay)
+    (setq gptel--completion-keymap-overlay nil))
   (setq gptel--completion-overlays nil)
   (setq gptel--completion-text nil)
   (setq gptel--completion-suppress-clear nil)
@@ -104,6 +191,7 @@ completions."
 (defun gptel-complete ()
   "Request a completion from ChatGPT and display it as ghost text."
   (interactive)
+  (gptel--cancel-post-command-timer)
   (gptel-clear-completion)
   (let* ((gptel-temperature gptel-autocomplete-temperature)
          (filename (if (buffer-file-name)
@@ -291,12 +379,13 @@ Example WRONG output (do NOT do this; never repeat the cursor token):
                          code-content)))))
              (setq gptel--completion-text completion-text)
              (when (and completion-text (not (string-empty-p completion-text)))
-               (let ((ov (make-overlay target-point target-point)))
-                 (setq gptel--completion-overlay ov)
-                 (push ov gptel--completion-overlays)
-                 (overlay-put ov 'after-string
-                              (propertize completion-text
-                                          'face 'shadow
+                (let ((ov (make-overlay target-point target-point)))
+                  (setq gptel--completion-overlay ov)
+                  (push ov gptel--completion-overlays)
+                  (gptel--move-keymap-overlay-at-point target-point)
+                  (overlay-put ov 'after-string
+                               (propertize completion-text
+                                           'face 'shadow
                                           'cursor t))
                  (overlay-put ov 'priority 1000))
                (gptel--setup-ghost-clear-hook)
@@ -334,6 +423,7 @@ Example WRONG output (do NOT do this; never repeat the cursor token):
         (insert next-chunk)
         (when (overlayp gptel--completion-overlay)
           (move-overlay gptel--completion-overlay (point) (point)))
+        (gptel--move-keymap-overlay-at-point)
         (setq gptel--completion-suppress-clear t)
         (setq gptel--completion-text remainder)
         (if (and remainder (not (string-empty-p remainder)))
