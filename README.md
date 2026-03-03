@@ -67,6 +67,7 @@ Control whether gptel's context system is used in completions (enabled by defaul
 
 - `M-x gptel-complete` — Request a completion at point and display it as ghost text.
 - `M-x gptel-accept-completion` — Accept the currently displayed completion and insert it.
+- `M-x gptel-accept-word` — Accept only one word of the completion, keeping ghost text for the rest.
 
 You can bind these commands to convenient keys in your preferred programming modes.
 

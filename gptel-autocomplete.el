@@ -66,6 +66,9 @@ completions."
 (defvar gptel--completion-request-id 0
   "Counter for tracking completion requests.")
 
+(defvar gptel--completion-suppress-clear nil
+  "Non-nil suppresses the next post-command clear.")
+
 (defun gptel--log (fmt &rest args)
   "Log message FMT with ARGS if `gptel-autocomplete-debug` is non-nil."
   (when gptel-autocomplete-debug
@@ -84,11 +87,18 @@ completions."
       (delete-overlay ov)))
   (setq gptel--completion-overlays nil)
   (setq gptel--completion-text nil)
-  (remove-hook 'post-command-hook #'gptel-clear-completion t))
+  (setq gptel--completion-suppress-clear nil)
+  (remove-hook 'post-command-hook #'gptel--post-command-clear t))
+
+(defun gptel--post-command-clear ()
+  "Clear ghost text unless suppressed for this command."
+  (if gptel--completion-suppress-clear
+      (setq gptel--completion-suppress-clear nil)
+    (gptel-clear-completion)))
 
 (defun gptel--setup-ghost-clear-hook ()
   "Set up hook to clear ghost text on user interaction."
-  (add-hook 'post-command-hook #'gptel-clear-completion nil t))
+  (add-hook 'post-command-hook #'gptel--post-command-clear nil t))
 
 ;;;###autoload
 (defun gptel-complete ()
@@ -302,6 +312,35 @@ Example WRONG output (do NOT do this; never repeat the cursor token):
         ;; Don't use save-excursion here
         (insert gptel--completion-text)
         (gptel-clear-completion))
+    (message "No completion to accept.")))
+
+;;;###autoload
+(defun gptel-accept-word ()
+  "Accept the next word from the current GPTel completion."
+  (interactive)
+  (if (and gptel--completion-text (not (string-empty-p gptel--completion-text)))
+      (let* ((text gptel--completion-text)
+             (non-space-pos (string-match "[^[:space:]]" text))
+             (end-pos (cond
+                       ((not non-space-pos) (length text))
+                       (t
+                        (or (string-match "[[:space:]]" text non-space-pos)
+                            (length text)))))
+             (next-chunk (substring text 0 end-pos))
+             (remainder (substring text end-pos)))
+        (gptel--log "Accepting word chunk: %S" next-chunk)
+        (insert next-chunk)
+        (when (overlayp gptel--completion-overlay)
+          (move-overlay gptel--completion-overlay (point) (point)))
+        (setq gptel--completion-suppress-clear t)
+        (setq gptel--completion-text remainder)
+        (if (and remainder (not (string-empty-p remainder)))
+            (when (overlayp gptel--completion-overlay)
+              (overlay-put gptel--completion-overlay 'after-string
+                           (propertize remainder
+                                       'face 'shadow
+                                       'cursor t)))
+          (gptel-clear-completion)))
     (message "No completion to accept.")))
 
 (provide 'gptel-autocomplete)
