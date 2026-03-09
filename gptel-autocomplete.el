@@ -108,6 +108,7 @@ Disable idle completion if set to nil."
   "Return the local keymap overlay for completion bindings."
   (unless (overlayp gptel--completion-keymap-overlay)
     (setq gptel--completion-keymap-overlay (make-overlay 1 1 nil nil t))
+    (push gptel--completion-keymap-overlay gptel--completion-overlays)
     (overlay-put gptel--completion-keymap-overlay
                  'keymap gptel-autocomplete-completion-map)
     (overlay-put gptel--completion-keymap-overlay 'priority 1001))
