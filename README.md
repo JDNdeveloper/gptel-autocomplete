@@ -9,6 +9,7 @@
 - Accept completions to insert them into your buffer.
 - Overlay-only keymap for completion acceptance bindings.
 - Optional idle-triggered automatic completion via minor mode.
+- Cancels in-flight completion requests when supported, so the latest completion is prioritized and intermediate requests do not continue running.
 - Includes context around the cursor (context window size is configurable).
 - Provide additional context using standard `gptel` features (e.g. `gptel-add`).
 
@@ -77,6 +78,8 @@ Configure automatic idle completion:
 ;; Disable idle completion.
 (setq gptel-autocomplete-idle-delay nil)
 ```
+
+When available, `gptel-autocomplete` cancels any in-flight completion request before sending a newer one. This reduces unnecessary token usage during rapid typing while preserving the latest completion behavior. This optimization requires `gptel-abort` support with curl transport enabled (`gptel-use-curl`).
 
 Bind keys that are active only while ghost text is visible:
 

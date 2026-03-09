@@ -84,6 +84,9 @@ Disable idle completion if set to nil."
 (defvar-local gptel--post-command-timer nil
   "Idle timer used to debounce automatic completion requests.")
 
+(defvar-local gptel--completion-active-request-id nil
+  "Request id for the current in-flight completion request.")
+
 (defconst gptel-autocomplete-completion-map (make-sparse-keymap)
   "Keymap active only while a completion overlay is visible.")
 
@@ -160,6 +163,24 @@ If POSITION is nil, use point."
   (and (not (minibufferp))
        (eolp)))
 
+(defun gptel--abort-supported-p ()
+  "Return non-nil when request abort is supported for completions."
+  (and (fboundp 'gptel-abort)
+       (boundp 'gptel-use-curl)
+       (or (and (stringp gptel-use-curl)
+                (file-executable-p gptel-use-curl))
+           (and gptel-use-curl
+                (executable-find "curl")))))
+
+(defun gptel--cancel-active-completion-request ()
+  "Cancel an active completion request when transport supports abort."
+  (when (and gptel--completion-active-request-id
+             (gptel--abort-supported-p))
+    (gptel--log "Canceling in-flight completion request")
+    (let ((inhibit-message t)
+          (message-log-max nil))
+      (gptel-abort (current-buffer)))))
+
 (defun gptel--log (fmt &rest args)
   "Log message FMT with ARGS if `gptel-autocomplete-debug` is non-nil."
   (when gptel-autocomplete-debug
@@ -201,6 +222,7 @@ If POSITION is nil, use point."
   (when (gptel--completion-allowed-p)
     (gptel--cancel-post-command-timer)
     (gptel-clear-completion)
+    (gptel--cancel-active-completion-request)
     (let* ((gptel-temperature gptel-autocomplete-temperature)
            (filename (if (buffer-file-name)
                          (file-name-nondirectory (buffer-file-name))
@@ -232,6 +254,7 @@ If POSITION is nil, use point."
                            context "\n````````\n"))
            (request-id (cl-incf gptel--completion-request-id))
            (target-point (point)))
+      (setq gptel--completion-active-request-id request-id)
       (gptel--log "Sending prompt of length %d (request-id: %d)"
                   (length prompt) request-id)
       (when gptel-autocomplete-debug
@@ -324,6 +347,8 @@ Example WRONG output (do NOT do this; never repeat the cursor token):
                      gptel-prompt-transform-functions)
        :callback
        (lambda (response info)
+         (when (eq request-id gptel--completion-active-request-id)
+           (setq gptel--completion-active-request-id nil))
          (gptel--log "Callback invoked: status=%s, request-id=%d, current-id=%d, raw-response=%S"
                      (plist-get info :status) request-id
                      gptel--completion-request-id response)
