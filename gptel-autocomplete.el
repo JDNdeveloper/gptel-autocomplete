@@ -134,6 +134,7 @@ If POSITION is nil, use point."
              (>= gptel-autocomplete-idle-delay 0)
              (= (point) point)
              (= (buffer-chars-modified-tick) tick)
+             (eolp)
              (not gptel--completion-overlay))
     (gptel-complete)))
 
@@ -144,6 +145,7 @@ If POSITION is nil, use point."
              (>= gptel-autocomplete-idle-delay 0)
              (not (minibufferp))
              (not (active-minibuffer-window))
+             (eolp)
              (not gptel--completion-overlay))
     (setq gptel--post-command-timer
           (run-with-idle-timer gptel-autocomplete-idle-delay
@@ -152,6 +154,11 @@ If POSITION is nil, use point."
                                (current-buffer)
                                (point)
                                (buffer-chars-modified-tick)))))
+
+(defun gptel--completion-allowed-p ()
+  "Return non-nil when completion should run at point."
+  (and (not (minibufferp))
+       (eolp)))
 
 (defun gptel--log (fmt &rest args)
   "Log message FMT with ARGS if `gptel-autocomplete-debug` is non-nil."
@@ -191,46 +198,47 @@ If POSITION is nil, use point."
 (defun gptel-complete ()
   "Request a completion from ChatGPT and display it as ghost text."
   (interactive)
-  (gptel--cancel-post-command-timer)
-  (gptel-clear-completion)
-  (let* ((gptel-temperature gptel-autocomplete-temperature)
-         (filename (if (buffer-file-name)
-                      (file-name-nondirectory (buffer-file-name))
-                    (buffer-name)))
-         (line-start (line-beginning-position))
-         (line-end (line-end-position))
-         (cursor-pos-in-line (- (point) line-start))
-         (current-line (buffer-substring-no-properties line-start line-end))
-         (before-cursor-in-line (substring current-line 0 cursor-pos-in-line))
-         (after-cursor-in-line (substring current-line cursor-pos-in-line))
-         (before-start (max (point-min)
+  (when (gptel--completion-allowed-p)
+    (gptel--cancel-post-command-timer)
+    (gptel-clear-completion)
+    (let* ((gptel-temperature gptel-autocomplete-temperature)
+           (filename (if (buffer-file-name)
+                         (file-name-nondirectory (buffer-file-name))
+                       (buffer-name)))
+           (line-start (line-beginning-position))
+           (line-end (line-end-position))
+           (cursor-pos-in-line (- (point) line-start))
+           (current-line (buffer-substring-no-properties line-start line-end))
+           (before-cursor-in-line (substring current-line 0 cursor-pos-in-line))
+           (after-cursor-in-line (substring current-line cursor-pos-in-line))
+           (before-start (max (point-min)
+                              (save-excursion
+                                (forward-line (- gptel-autocomplete-before-context-lines))
+                                (line-beginning-position))))
+           (after-end (min (point-max)
                            (save-excursion
-                             (forward-line (- gptel-autocomplete-before-context-lines))
-                             (line-beginning-position))))
-         (after-end (min (point-max)
-                        (save-excursion
-                          (goto-char line-end)
-                          (forward-line gptel-autocomplete-after-context-lines)
-                          (line-end-position))))
-         (before-context (buffer-substring-no-properties before-start line-start))
-         (after-context (buffer-substring-no-properties line-end after-end))
-         ;; Construct the marked context with completion boundaries
-         (marked-line (concat "█START_COMPLETION█\n"
-                             before-cursor-in-line "█CURSOR█" after-cursor-in-line "\n"
-                             "█END_COMPLETION█"))
-         (context (concat before-context marked-line after-context))
-         (prompt (concat "Complete the code at the cursor position █CURSOR█ in file '"
-                         filename "':\n````````\n"
-                         context "\n````````\n"))
-         (request-id (cl-incf gptel--completion-request-id))
-         (target-point (point)))
-    (gptel--log "Sending prompt of length %d (request-id: %d)"
-                (length prompt) request-id)
-    (when gptel-autocomplete-debug
-      (gptel--log "Full prompt:\n%s" prompt))
-    (gptel-request
-     prompt
-     :system "/no_think
+                             (goto-char line-end)
+                             (forward-line gptel-autocomplete-after-context-lines)
+                             (line-end-position))))
+           (before-context (buffer-substring-no-properties before-start line-start))
+           (after-context (buffer-substring-no-properties line-end after-end))
+           ;; Construct the marked context with completion boundaries
+           (marked-line (concat "█START_COMPLETION█\n"
+                                before-cursor-in-line "█CURSOR█" after-cursor-in-line "\n"
+                                "█END_COMPLETION█"))
+           (context (concat before-context marked-line after-context))
+           (prompt (concat "Complete the code at the cursor position █CURSOR█ in file '"
+                           filename "':\n````````\n"
+                           context "\n````````\n"))
+           (request-id (cl-incf gptel--completion-request-id))
+           (target-point (point)))
+      (gptel--log "Sending prompt of length %d (request-id: %d)"
+                  (length prompt) request-id)
+      (when gptel-autocomplete-debug
+        (gptel--log "Full prompt:\n%s" prompt))
+      (gptel-request
+       prompt
+       :system "/no_think
 You are a code completion assistant integrated into a code editor.
 
 Complete the code at the cursor position █CURSOR█. The █START_COMPLETION█ and █END_COMPLETION█ \
@@ -310,88 +318,88 @@ Example WRONG output (do NOT do this; never repeat the cursor token):
 █END_COMPLETION█
 ```
 "
-     :buffer (current-buffer)
-     :position target-point
-     :transforms (when gptel-autocomplete-use-context
-                   gptel-prompt-transform-functions)
-     :callback
-     (lambda (response info)
-       (gptel--log "Callback invoked: status=%s, request-id=%d, current-id=%d, raw-response=%S"
-                   (plist-get info :status) request-id
-                   gptel--completion-request-id response)
-       ;; Only process if this is still the latest request
-       (if (not (eq request-id gptel--completion-request-id))
-           (gptel--log "Ignoring outdated request %d (current: %d)"
-                       request-id gptel--completion-request-id)
-         (pcase response
-           ((pred null)
-            (message "gptel-complete failed: %s" (plist-get info :status)))
-           (`abort
-            (gptel--log "Request aborted"))
-           (`(tool-call . ,tool-calls)
-            (gptel--log "Ignoring tool-call response: %S" tool-calls))
-           (`(tool-result . ,tool-results)
-            (gptel--log "Ignoring tool-result response: %S" tool-results))
-           (`(reasoning . ,text)
-            (gptel--log "Ignoring reasoning block (thinking) response: %S" text))
-           ((pred stringp)
-           (let* ((trimmed (string-trim response))
-                  ;; Extract code from markdown code blocks
-                  (code-content (if (string-match
-                                     "^```\\(?:[a-zA-Z]*\\)?\n\\(\\(?:.\\|\n\\)*?\\)\n```$"
-                                     trimmed)
-                                    (match-string 1 trimmed)
-                                  trimmed))
-                  ;; Extract content between START_COMPLETION and END_COMPLETION markers
-                  (completion-text
-                   (if (and code-content
-                            (string-match
-                             "█START_COMPLETION█\n\\(\\(?:.\\|\n\\)*?\\)\n█END_COMPLETION█"
-                             code-content))
-                       (let ((extracted (match-string 1 code-content)))
-                         (gptel--log "Extracted completion between markers: %S" extracted)
-                         ;; Remove the part before cursor on the current line
-                         (if (and extracted before-cursor-in-line
-                                 (not (string-empty-p before-cursor-in-line)))
-                             (let ((lines (split-string extracted "\n" t))
-                                   (first-line (car (split-string extracted "\n"))))
-                               (if (and first-line
-                                       (string-prefix-p before-cursor-in-line first-line))
-                                   (let ((remainder (substring
-                                                     first-line
-                                                     (length before-cursor-in-line))))
-                                     (if (cdr lines)
-                                         (concat remainder "\n" (string-join (cdr lines) "\n"))
-                                       remainder))
-                                 extracted))
-                           extracted))
-                     (progn
-                       (gptel--log "No completion markers found, falling back to full response")
-                       ;; Fallback to old logic if no markers found
-                       (if (and code-content before-cursor-in-line
-                               (not (string-empty-p before-cursor-in-line)))
-                           (let ((overlap-pos (string-search before-cursor-in-line code-content)))
-                             (if overlap-pos
-                                 (substring code-content
-                                            (+ overlap-pos
-                                               (length before-cursor-in-line)))
-                               code-content))
-                         code-content)))))
-             (setq gptel--completion-text completion-text)
-             (when (and completion-text (not (string-empty-p completion-text)))
-                (let ((ov (make-overlay target-point target-point)))
-                  (setq gptel--completion-overlay ov)
-                  (push ov gptel--completion-overlays)
-                  (gptel--move-keymap-overlay-at-point target-point)
-                  (overlay-put ov 'after-string
-                               (propertize completion-text
-                                           'face 'shadow
-                                          'cursor t))
-                 (overlay-put ov 'priority 1000))
-               (gptel--setup-ghost-clear-hook)
-               (gptel--log "Displayed ghost text: %S" completion-text))))
-           (_
-            (gptel--log "Unexpected response type: %S" response))))))))
+       :buffer (current-buffer)
+       :position target-point
+       :transforms (when gptel-autocomplete-use-context
+                     gptel-prompt-transform-functions)
+       :callback
+       (lambda (response info)
+         (gptel--log "Callback invoked: status=%s, request-id=%d, current-id=%d, raw-response=%S"
+                     (plist-get info :status) request-id
+                     gptel--completion-request-id response)
+         ;; Only process if this is still the latest request
+         (if (not (eq request-id gptel--completion-request-id))
+             (gptel--log "Ignoring outdated request %d (current: %d)"
+                         request-id gptel--completion-request-id)
+           (pcase response
+             ((pred null)
+              (message "gptel-complete failed: %s" (plist-get info :status)))
+             (`abort
+              (gptel--log "Request aborted"))
+             (`(tool-call . ,tool-calls)
+              (gptel--log "Ignoring tool-call response: %S" tool-calls))
+             (`(tool-result . ,tool-results)
+              (gptel--log "Ignoring tool-result response: %S" tool-results))
+             (`(reasoning . ,text)
+              (gptel--log "Ignoring reasoning block (thinking) response: %S" text))
+             ((pred stringp)
+              (let* ((trimmed (string-trim response))
+                     ;; Extract code from markdown code blocks
+                     (code-content (if (string-match
+                                        "^```\\(?:[a-zA-Z]*\\)?\n\\(\\(?:.\\|\n\\)*?\\)\n```$"
+                                        trimmed)
+                                       (match-string 1 trimmed)
+                                     trimmed))
+                     ;; Extract content between START_COMPLETION and END_COMPLETION markers
+                     (completion-text
+                      (if (and code-content
+                               (string-match
+                                "█START_COMPLETION█\n\\(\\(?:.\\|\n\\)*?\\)\n█END_COMPLETION█"
+                                code-content))
+                          (let ((extracted (match-string 1 code-content)))
+                            (gptel--log "Extracted completion between markers: %S" extracted)
+                            ;; Remove the part before cursor on the current line
+                            (if (and extracted before-cursor-in-line
+                                     (not (string-empty-p before-cursor-in-line)))
+                                (let ((lines (split-string extracted "\n" t))
+                                      (first-line (car (split-string extracted "\n"))))
+                                  (if (and first-line
+                                           (string-prefix-p before-cursor-in-line first-line))
+                                      (let ((remainder (substring
+                                                        first-line
+                                                        (length before-cursor-in-line))))
+                                        (if (cdr lines)
+                                            (concat remainder "\n" (string-join (cdr lines) "\n"))
+                                          remainder))
+                                    extracted))
+                              extracted))
+                        (progn
+                          (gptel--log "No completion markers found, falling back to full response")
+                          ;; Fallback to old logic if no markers found
+                          (if (and code-content before-cursor-in-line
+                                   (not (string-empty-p before-cursor-in-line)))
+                              (let ((overlap-pos (string-search before-cursor-in-line code-content)))
+                                (if overlap-pos
+                                    (substring code-content
+                                               (+ overlap-pos
+                                                  (length before-cursor-in-line)))
+                                  code-content))
+                            code-content)))))
+                (setq gptel--completion-text completion-text)
+                (when (and completion-text (not (string-empty-p completion-text)))
+                  (let ((ov (make-overlay target-point target-point)))
+                    (setq gptel--completion-overlay ov)
+                    (push ov gptel--completion-overlays)
+                    (gptel--move-keymap-overlay-at-point target-point)
+                    (overlay-put ov 'after-string
+                                 (propertize completion-text
+                                             'face 'shadow
+                                             'cursor t))
+                    (overlay-put ov 'priority 1000))
+                  (gptel--setup-ghost-clear-hook)
+                  (gptel--log "Displayed ghost text: %S" completion-text))))
+             (_
+              (gptel--log "Unexpected response type: %S" response)))))))))
 
 ;;;###autoload
 (defun gptel-accept-completion ()
