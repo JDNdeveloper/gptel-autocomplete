@@ -79,6 +79,12 @@ Configure automatic idle completion:
 (setq gptel-autocomplete-idle-delay nil)
 ```
 
+Customize the system prompt used for completion requests:
+
+```elisp
+(setq gptel-autocomplete-system-prompt "Your custom system prompt here")
+```
+
 When available, `gptel-autocomplete` cancels any in-flight completion request before sending a newer one. This reduces unnecessary token usage during rapid typing while preserving the latest completion behavior. This optimization requires `gptel-abort` support with curl transport enabled (`gptel-use-curl`).
 
 Bind keys that are active only while ghost text is visible:
@@ -132,7 +138,7 @@ This would typically return something like:
 ````
 ```typescript
 function calculateArea(width: number, height: number): number {
-  return width * area;
+  return width * height;
 }
 ```
 ````
@@ -140,7 +146,7 @@ function calculateArea(width: number, height: number): number {
 When what I wanted is:
 
 ```
-area;
+height;
 ```
 
 Some common issues encountered in responses:
@@ -157,6 +163,7 @@ I found the following techniques yielded good results:
 - Include an explicit cursor marker.
 - Provide explicit examples of bad output in the system prompt.
 - Use a lower temperature for more deterministic responses.
+- Using bold and caps for the word "**MUST**" makes a huge difference.
 
 Here's an example of how code is sent in the user prompt:
 
