@@ -208,19 +208,19 @@ If POSITION is nil, use point."
   "Cancel an active completion request when transport supports abort."
   (when (and gptel--completion-active-request-id
              (gptel--abort-supported-p))
-    (gptel--log "Canceling in-flight completion request")
+    (gptel-autocomplete--log "Canceling in-flight completion request")
     (let ((inhibit-message t)
           (message-log-max nil))
       (gptel-abort (current-buffer)))))
 
-(defun gptel--log (fmt &rest args)
+(defun gptel-autocomplete--log (fmt &rest args)
   "Log message FMT with ARGS if `gptel-autocomplete-debug` is non-nil."
   (when gptel-autocomplete-debug
     (apply #'message (concat "[gptel-autocomplete] " fmt) args)))
 
 (defun gptel-clear-completion ()
   "Clear all GPTel completion overlays and text."
-  (gptel--log "Clearing completion overlays/text")
+  (gptel-autocomplete--log "Clearing completion overlays/text")
   ;; Clear the main overlay
   (when gptel--completion-overlay
     (delete-overlay gptel--completion-overlay)
@@ -287,10 +287,10 @@ If POSITION is nil, use point."
            (request-id (cl-incf gptel--completion-request-id))
            (target-point (point)))
       (setq gptel--completion-active-request-id request-id)
-      (gptel--log "Sending prompt of length %d (request-id: %d)"
+      (gptel-autocomplete--log "Sending prompt of length %d (request-id: %d)"
                   (length prompt) request-id)
       (when gptel-autocomplete-debug
-        (gptel--log "Full prompt:\n%s" prompt))
+        (gptel-autocomplete--log "Full prompt:\n%s" prompt))
       (gptel-request
        prompt
        :system gptel-autocomplete-system-prompt
@@ -302,24 +302,24 @@ If POSITION is nil, use point."
        (lambda (response info)
          (when (eq request-id gptel--completion-active-request-id)
            (setq gptel--completion-active-request-id nil))
-         (gptel--log "Callback invoked: status=%s, request-id=%d, current-id=%d, raw-response=%S"
+         (gptel-autocomplete--log "Callback invoked: status=%s, request-id=%d, current-id=%d, raw-response=%S"
                      (plist-get info :status) request-id
                      gptel--completion-request-id response)
          ;; Only process if this is still the latest request
          (if (not (eq request-id gptel--completion-request-id))
-             (gptel--log "Ignoring outdated request %d (current: %d)"
+             (gptel-autocomplete--log "Ignoring outdated request %d (current: %d)"
                          request-id gptel--completion-request-id)
            (pcase response
              ((pred null)
               (message "gptel-complete failed: %s" (plist-get info :status)))
              (`abort
-              (gptel--log "Request aborted"))
+              (gptel-autocomplete--log "Request aborted"))
              (`(tool-call . ,tool-calls)
-              (gptel--log "Ignoring tool-call response: %S" tool-calls))
+              (gptel-autocomplete--log "Ignoring tool-call response: %S" tool-calls))
              (`(tool-result . ,tool-results)
-              (gptel--log "Ignoring tool-result response: %S" tool-results))
+              (gptel-autocomplete--log "Ignoring tool-result response: %S" tool-results))
              (`(reasoning . ,text)
-              (gptel--log "Ignoring reasoning block (thinking) response: %S" text))
+              (gptel-autocomplete--log "Ignoring reasoning block (thinking) response: %S" text))
              ((pred stringp)
               (let* ((trimmed (string-trim response))
                      ;; Extract code from markdown code blocks
@@ -335,7 +335,7 @@ If POSITION is nil, use point."
                                 "█START_COMPLETION█\n\\(\\(?:.\\|\n\\)*?\\)\n█END_COMPLETION█"
                                 code-content))
                           (let ((extracted (match-string 1 code-content)))
-                            (gptel--log "Extracted completion between markers: %S" extracted)
+                            (gptel-autocomplete--log "Extracted completion between markers: %S" extracted)
                             ;; Remove the part before cursor on the current line
                             (if (and extracted before-cursor-in-line
                                      (not (string-empty-p before-cursor-in-line)))
@@ -352,7 +352,7 @@ If POSITION is nil, use point."
                                     extracted))
                               extracted))
                         (progn
-                          (gptel--log "No completion markers found, falling back to full response")
+                          (gptel-autocomplete--log "No completion markers found, falling back to full response")
                           ;; Fallback to old logic if no markers found
                           (if (and code-content before-cursor-in-line
                                    (not (string-empty-p before-cursor-in-line)))
@@ -375,9 +375,9 @@ If POSITION is nil, use point."
                                              'cursor t))
                     (overlay-put ov 'priority 1000))
                   (gptel--setup-ghost-clear-hook)
-                  (gptel--log "Displayed ghost text: %S" completion-text))))
+                  (gptel-autocomplete--log "Displayed ghost text: %S" completion-text))))
              (_
-              (gptel--log "Unexpected response type: %S" response)))))))))
+              (gptel-autocomplete--log "Unexpected response type: %S" response)))))))))
 
 ;;;###autoload
 (defun gptel-accept-completion ()
@@ -385,7 +385,7 @@ If POSITION is nil, use point."
   (interactive)
   (if (and gptel--completion-text (not (string-empty-p gptel--completion-text)))
       (progn
-        (gptel--log "Accepting completion: %S" gptel--completion-text)
+        (gptel-autocomplete--log "Accepting completion: %S" gptel--completion-text)
         ;; Don't use save-excursion here
         (insert gptel--completion-text)
         (gptel-clear-completion))
@@ -405,7 +405,7 @@ If POSITION is nil, use point."
                             (length text)))))
              (next-chunk (substring text 0 end-pos))
              (remainder (substring text end-pos)))
-        (gptel--log "Accepting word chunk: %S" next-chunk)
+        (gptel-autocomplete--log "Accepting word chunk: %S" next-chunk)
         (insert next-chunk)
         (when (overlayp gptel--completion-overlay)
           (move-overlay gptel--completion-overlay (point) (point)))
